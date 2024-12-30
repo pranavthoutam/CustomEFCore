@@ -1,18 +1,18 @@
 ﻿using Microsoft.Data.SqlClient;
-using System.Text;
+using System.ComponentModel.DataAnnotations.Schema;
+using System.Reflection;
 
 namespace CustomEFCore.Providers
 {
     public class SqlServerProvider
     {
-        private string _connectionString;
+        private readonly string _connectionString;
 
         public SqlServerProvider(string connectionString)
         {
             _connectionString = connectionString;
         }
 
-        // Ensure the database exists or create it if it doesn't
         public void EnsureDatabaseCreated()
         {
             using (var connection = new SqlConnection(_connectionString))
@@ -21,13 +21,10 @@ namespace CustomEFCore.Providers
                 {
                     connection.Open();
 
-                    // Get the database name from the connection string
                     var dbName = new SqlConnectionStringBuilder(_connectionString).InitialCatalog;
-
-                    // Check if the database exists
                     var checkDbQuery = $@"
                         IF NOT EXISTS (SELECT * FROM sys.databases WHERE name = N'{dbName}')
-                        BEGIN 
+                        BEGIN
                             CREATE DATABASE {dbName};
                         END";
 
@@ -43,72 +40,171 @@ namespace CustomEFCore.Providers
             }
         }
 
-        // Switch to the target database in the connection string
-        public void SwitchToTargetDatabase()
+        public void CreateTableFromEntity(Type entityType)
         {
-            // Change the connection string to use the 'CustomEfCore' database after creation
-            var builder = new SqlConnectionStringBuilder(_connectionString)
-            {
-                InitialCatalog = "CustomEfCore" // Change this to your actual target database name
-            };
+            var tableName = entityType.Name;
+            var properties = entityType.GetProperties();
+            var columnDefinitions = new List<string>();
+            var foreignKeys = new List<string>();
+            var primaryKey = string.Empty;
 
-            _connectionString = builder.ToString();
-            Console.WriteLine("Switched to target database: CustomEfCore.");
+            foreach (var property in properties)
+            {
+                string columnDefinition;
+
+                // Handle primary key
+                if (property.Name == "Id")
+                {
+                    columnDefinition = $"[{property.Name}] INT";
+                    primaryKey = $"PRIMARY KEY ([{property.Name}])";
+                }
+                else
+                {
+                    columnDefinition = $"[{property.Name}] {GetSqlType(property.PropertyType)}";
+                }
+
+                columnDefinitions.Add(columnDefinition);
+
+                if (IsForeignKey(property))
+                {
+                    var foreignKeyTable = GetForeignKeyTable(property);
+                    if (foreignKeyTable != null)
+                    {
+                        var foreignKeyDefinition = $"CONSTRAINT FK_{tableName}_{property.Name} FOREIGN KEY ([{property.Name}]) REFERENCES [{foreignKeyTable}]([Id])";
+                        foreignKeys.Add(foreignKeyDefinition);
+                    }
+                }
+            }
+
+            var columns = string.Join(", ", columnDefinitions);
+            if (!string.IsNullOrEmpty(primaryKey))
+            {
+                columns += $", {primaryKey}";
+            }
+
+            var foreignKeysClause = foreignKeys.Count > 0 ? ", " + string.Join(", ", foreignKeys) : string.Empty;
+
+            var createTableQuery = $"CREATE TABLE [{tableName}] ({columns}{foreignKeysClause})";
+
+            Console.WriteLine($"Executing Query: {createTableQuery}");
+
+            using (var connection = new SqlConnection(_connectionString))
+            {
+                connection.Open();
+                using (var command = new SqlCommand(createTableQuery, connection))
+                {
+                    try
+                    {
+                        command.ExecuteNonQuery();
+                        Console.WriteLine($"Table for {tableName} created successfully.");
+                    }
+                    catch (SqlException ex)
+                    {
+                        Console.WriteLine($"Error executing SQL: {ex.Message}");
+                    }
+                }
+            }
         }
 
-        // Create tables based on model types (like Person)
-        public void CreateTablesFromModel(IEnumerable<Type> entityTypes)
+
+        private string GetForeignKeyTable(PropertyInfo property)
+        {
+            if (property.Name.EndsWith("Id") && property.Name !="Id")
+            {
+                return property.Name.Replace("Id", "");
+            }
+            var foreignKeyAttr = property.GetCustomAttribute<ForeignKeyAttribute>();
+            return foreignKeyAttr?.Name;
+        }
+
+
+
+        private bool IsForeignKey(PropertyInfo property)
+        {
+            return property.Name.EndsWith("Id", StringComparison.OrdinalIgnoreCase) ||
+                   property.GetCustomAttribute<ForeignKeyAttribute>() != null;
+        }
+
+
+        private Type GetReferencedEntity(PropertyInfo property)
+        {
+            var referencedTypeName = property.Name.Substring(0, property.Name.Length - 2);
+            return Type.GetType($"CustomEFCore.Models.{referencedTypeName}, CustomEFCore");
+        }
+
+        public void InsertEntity<TEntity>(TEntity entity)
         {
             using (var connection = new SqlConnection(_connectionString))
             {
                 connection.Open();
 
-                foreach (var entityType in entityTypes)
-                {
-                    var tableName = entityType.Name;
-                    var columns = GetColumns(entityType);
-                    var createTableCommand = BuildCreateTableSql(tableName, columns);
+                var tableName = typeof(TEntity).Name;
+                var properties = typeof(TEntity).GetProperties();
+                var columns = string.Join(",", properties.Select(p => p.Name));
+                var values = string.Join(",", properties.Select(p => $"'{p.GetValue(entity)}'"));
 
-                    var command = new SqlCommand(createTableCommand, connection);
+                var insertQuery = $"INSERT INTO {tableName} ({columns}) VALUES ({values});";
+
+                using (var command = new SqlCommand(insertQuery, connection))
+                {
                     command.ExecuteNonQuery();
-                    Console.WriteLine($"Table '{tableName}' created or already exists.");
+                }
+                Console.WriteLine($"Entity inserted into table '{tableName}'.");
+            }
+        }
+
+
+        public void DeleteEntity<TEntity>(TEntity entity)
+        {
+            using (var connection = new SqlConnection(_connectionString))
+            {
+                connection.Open();
+
+                var tableName = typeof(TEntity).Name;
+                var keyProperty = typeof(TEntity).GetProperties().First();
+                var keyName = keyProperty.Name;
+                var keyValue = keyProperty.GetValue(entity);
+
+                var deleteQuery = $"DELETE FROM {tableName} WHERE {keyName} = '{keyValue}';";
+
+                using (var command = new SqlCommand(deleteQuery, connection))
+                {
+                    command.ExecuteNonQuery();
+                }
+                Console.WriteLine($"Entity deleted from table '{tableName}'.");
+            }
+        }
+
+        public List<TEntity> GetEntities<TEntity>() where TEntity : class
+        {
+            var entities = new List<TEntity>();
+
+            using (var connection = new SqlConnection(_connectionString))
+            {
+                connection.Open();
+
+                var tableName = typeof(TEntity).Name;
+                var selectQuery = $"SELECT * FROM {tableName};";
+
+                using (var command = new SqlCommand(selectQuery, connection))
+                using (var reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        var entity = Activator.CreateInstance<TEntity>();
+                        foreach (var property in typeof(TEntity).GetProperties())
+                        {
+                            var value = reader[property.Name];
+                            property.SetValue(entity, value == DBNull.Value ? null : value);
+                        }
+                        entities.Add(entity);
+                    }
                 }
             }
+
+            return entities;
         }
 
-        // Generate SQL for creating a table
-        private string BuildCreateTableSql(string tableName, Dictionary<string, string> columns)
-        {
-            var sqlBuilder = new StringBuilder();
-            sqlBuilder.AppendLine($"CREATE TABLE {tableName} (");
-
-            foreach (var column in columns)
-            {
-                sqlBuilder.AppendLine($"    {column.Key} {column.Value},");
-            }
-
-            // Remove trailing comma
-            sqlBuilder.Length -= 3;
-            sqlBuilder.AppendLine(");");
-
-            return sqlBuilder.ToString();
-        }
-
-        // Get columns for an entity using reflection
-        private Dictionary<string, string> GetColumns(Type entityType)
-        {
-            var columns = new Dictionary<string, string>();
-
-            foreach (var prop in entityType.GetProperties())
-            {
-                var columnType = GetSqlType(prop.PropertyType);
-                columns.Add(prop.Name, columnType);
-            }
-
-            return columns;
-        }
-
-        // Map C# types to SQL Server types
         private string GetSqlType(Type type)
         {
             if (type == typeof(int)) return "INT";
@@ -119,22 +215,6 @@ namespace CustomEFCore.Providers
             if (type == typeof(Guid)) return "UNIQUEIDENTIFIER";
 
             throw new Exception($"Unsupported type {type.Name}");
-        }
-
-        // Run migrations (basic version)
-        public void ApplyMigrations(List<string> migrationScripts)
-        {
-            using (var connection = new SqlConnection(_connectionString))
-            {
-                connection.Open();
-
-                foreach (var script in migrationScripts)
-                {
-                    var command = new SqlCommand(script, connection);
-                    command.ExecuteNonQuery();
-                    Console.WriteLine("Migration applied.");
-                }
-            }
         }
     }
 }

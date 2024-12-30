@@ -1,45 +1,50 @@
-﻿using CustomEFCore.Core.DbContext;
+﻿using CustomEFCore.Core;
+using CustomEFCore.Core.DbContext;
+using CustomEFCore.Migrations;
 using CustomEFCore.Models;
-using CustomEFCore.Providers;
-using System;
-using System.Collections.Generic;
 
 class Program
 {
     static void Main(string[] args)
     {
-        // Connection string for the "master" database
-        var connectionString = "Server=LAPTOP-B464VUCR;Database=master;Integrated Security=SSPI;TrustServerCertificate=True;";
-
-        // Create the SqlServerProvider to ensure the database exists
-        var sqlProvider = new SqlServerProvider(connectionString);
-
-        // Ensure the target database exists and is created if necessary
-        sqlProvider.EnsureDatabaseCreated();
-
-        // Now switch to the target database (CustomEfCore)
-        sqlProvider.SwitchToTargetDatabase();
-
-        // Create a new CustomDbContext instance for the target database
+        var connectionString = "Server=192.168.0.30;Database=EMP276;User Id=User5;Password=CDev005#8;Trusted_Connection=False;TrustServerCertificate=True;";
         var context = new CustomDbContext(connectionString);
 
-        // Get the entity types (in your case, you have a Person class)
-        var entityTypes = new List<Type> { typeof(Person) };
+        context.AddNewTables(new List<Type>
+            {
+                typeof(Product),
+                typeof(Address),
+                typeof(Person)
+            });
+        InsertDataIntoTables(context);
 
-        // Create tables for the entity types
-        sqlProvider.CreateTablesFromModel(entityTypes);
+        //var schemaInfoProvider = new SchemaInfoProvider(connectionString);
+        //var scriptGenerator = new ScriptGenerator();
+        //var migrationManager = new MigrationManager(schemaInfoProvider, scriptGenerator);
+        //var schemaUpdater = new SchemaUpdater(migrationManager);
 
-        // Add a person entity to the database
-        var personSet = context.Set<Person>();
-        personSet.Add(new Person { Id = 1, Name = "Alice" });
-        personSet.Add(new Person { Id = 2, Name = "Bob" });
+        //schemaUpdater.UpdateSchema();
 
-        // Save changes to the database
-        context.SaveChanges();
 
-        // Dispose the context after operations
         context.Dispose();
 
-        Console.WriteLine("Database and table operations completed.");
+        Console.WriteLine("Operations completed.");
+    }
+    static void InsertDataIntoTables(CustomDbContext context)
+    {
+        var addressSet = context.Set<Address>();
+        var personSet = context.Set<Person>();
+        var productSet = context.Set<Product>();
+        
+
+        var address = new Address { Id = 2, Street = "123 Main St" };
+        addressSet.Add(address);
+
+        var person = new Person { Id = 2, Name = "John Doe",AddressId = 2 };
+
+        personSet.Add(person);
+
+        var product = new Product { Id = 2, Name = "Laptop", Price = 1000.00m };
+        productSet.Add(product);
     }
 }

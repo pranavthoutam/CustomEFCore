@@ -1,5 +1,4 @@
 ﻿using CustomEFCore.Providers;
-using CustomEFCore.Models;
 
 namespace CustomEFCore.Core.DbContext
 {
@@ -8,46 +7,44 @@ namespace CustomEFCore.Core.DbContext
         private readonly string _connectionString;
         private readonly SqlServerProvider _provider;
         private readonly Dictionary<Type, object> _sets = new Dictionary<Type, object>();
+        private readonly HashSet<Type> _initializedEntities = new HashSet<Type>();
 
         public CustomDbContext(string connectionString)
         {
             _connectionString = connectionString;
             _provider = new SqlServerProvider(connectionString);
-            _provider.EnsureDatabaseCreated(); // Ensure the database exists
+            _provider.EnsureDatabaseCreated();
         }
-
-        // Set method to return a DbSet<TEntity>
-        public DbSet<TEntity> Set<TEntity>() where TEntity : class
+        public DbSet<T> Set<T>() where T : class
         {
-            if (!_sets.ContainsKey(typeof(TEntity)))
+            if (!_sets.ContainsKey(typeof(T)))
             {
-                _sets[typeof(TEntity)] = new DbSet<TEntity>(this);
+                EnsureTableCreated(typeof(T));
+                _sets[typeof(T)] = new DbSet<T>(_provider);
             }
-            return (DbSet<TEntity>)_sets[typeof(TEntity)];
+            return (DbSet<T>)_sets[typeof(T)];
         }
-
-        // Create tables based on models (entities)
-        public void CreateTables()
+        private void EnsureTableCreated(Type entityType)
         {
-            _provider.CreateTablesFromModel(new List<Type> { typeof(Person) }); // Add more types as needed
+            if (!_initializedEntities.Contains(entityType))
+            {
+                _provider.CreateTableFromEntity(entityType);
+                _initializedEntities.Add(entityType);
+            }
         }
-
-        // Apply migrations (optional for future use)
-        public void ApplyMigrations(List<string> migrationScripts)
+        public void AddNewTables(IEnumerable<Type> entityTypes)
         {
-            _provider.ApplyMigrations(migrationScripts);
+            foreach (var entityType in entityTypes)
+            {
+                EnsureTableCreated(entityType);
+            }
         }
-
-        // Save changes (stub for now)
         public void SaveChanges()
         {
             Console.WriteLine("Changes saved.");
         }
-
-        // Dispose of resources
         public void Dispose()
         {
-            // Dispose resources if necessary
             Console.WriteLine("DbContext disposed.");
         }
     }

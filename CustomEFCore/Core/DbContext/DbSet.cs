@@ -1,34 +1,36 @@
-﻿
+﻿using CustomEFCore.Providers;
+
 namespace CustomEFCore.Core.DbContext
 {
-    public class DbSet<TEntity> where TEntity : class
+    public class DbSet<T> where T : class
     {
-        private readonly CustomDbContext _context;
-        private readonly List<TEntity> _entities = new List<TEntity>();
+        private readonly SqlServerProvider _provider;
 
-        public DbSet(CustomDbContext context)
+        public DbSet(SqlServerProvider provider)
         {
-            _context = context;
+            _provider = provider;
         }
 
-        // Add an entity to the DbSet
-        public void Add(TEntity entity)
+        public void Add(T entity)
         {
-            _entities.Add(entity);
-            _context.SaveChanges();  // Placeholder save changes
+            _provider.InsertEntity(entity);
         }
 
-        // Remove an entity from the DbSet
-        public void Remove(TEntity entity)
+        public void Remove(T entity)
         {
-            _entities.Remove(entity);
-            _context.SaveChanges();  // Placeholder save changes
+            _provider.DeleteEntity(entity);
         }
 
-        // Return IQueryable for queries
-        public IQueryable<TEntity> AsQueryable()
+        public List<T> ToList()
         {
-            return _entities.AsQueryable();
+            return _provider.GetEntities<T>();
         }
+
+        public IQueryable<T> Where(Func<T, bool> predicate)
+        {
+            return ToList().AsQueryable().Where(predicate).AsQueryable();
+        }
+
+
     }
 }
