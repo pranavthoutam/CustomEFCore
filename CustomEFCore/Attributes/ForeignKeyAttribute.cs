@@ -1,11 +1,11 @@
 ﻿namespace CustomEFCore.Attributes
 {
     [AttributeUsage(AttributeTargets.Property, AllowMultiple = false)]
-    public class ForeignKeyAttribute : Attribute
+    public class FKAttribute : Attribute
     {
         public string ReferencedTable { get; }
 
-        public ForeignKeyAttribute(string referencedTable)
+        public FKAttribute(string referencedTable)
         {
             ReferencedTable = referencedTable;
         }

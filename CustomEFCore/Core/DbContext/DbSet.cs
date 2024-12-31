@@ -2,7 +2,7 @@
 
 namespace CustomEFCore.Core.DbContext
 {
-    public class DbSet<T> where T : class
+    public class DbSet<T> where T : class,new()
     {
         private readonly SqlServerProvider _provider;
 
@@ -20,11 +20,11 @@ namespace CustomEFCore.Core.DbContext
         {
             _provider.DeleteEntity(entity);
         }
-
-        public List<T> ToList()
+        public void Update(T entity)
         {
-            return _provider.GetEntities<T>();
+            _provider.UpdateEntity(entity);
         }
+        public List<T> ToList() => _provider.GetEntities<T>();
 
         public IQueryable<T> Where(Func<T, bool> predicate)
         {
