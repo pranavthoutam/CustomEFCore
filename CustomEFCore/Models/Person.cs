@@ -15,5 +15,8 @@ namespace CustomEFCore.Models
     {
         public int Id { get; set; }
         public string Street { get; set; }
+
+        //[FK("Product")]
+        //public int ProductId { get; set; }
     }
 }

@@ -1,6 +1,5 @@
 ﻿using Microsoft.Data.SqlClient;
 using System.Reflection;
-using System.ComponentModel.DataAnnotations.Schema;
 using System.ComponentModel.DataAnnotations;
 using CustomEFCore.Attributes;
 using CustomEFCore.Core.DbContext;
@@ -33,7 +32,7 @@ namespace CustomEFCore.Providers
             Console.WriteLine($"Database '{dbName}' created or already exists.");
         }
 
-        public void CreateTableFromEntity(Type entityType,string tableName)
+        public void CreateTableFromEntity(Type entityType, string tableName)
         {
             var properties = entityType.GetProperties();
             var columnDefinitions = new List<string>();
@@ -46,9 +45,21 @@ namespace CustomEFCore.Providers
 
                 if (property.Name == "Id")
                 {
-                    columnDefinition = $"[{property.Name}] INT";
+                    if (property.PropertyType == typeof(int) || property.PropertyType == typeof(long) || property.PropertyType == typeof(short) || property.PropertyType == typeof(byte))
+                    {
+                        columnDefinition = $"[{property.Name}] {GetSqlType(property.PropertyType)} IDENTITY(1,1)";
+                    }
+                    else if (property.PropertyType == typeof(Guid))
+                    {
+                        columnDefinition = $"[{property.Name}] UNIQUEIDENTIFIER DEFAULT NEWSEQUENTIALID()";
+                    }
+                    else
+                    {
+                        columnDefinition = $"[{property.Name}] {GetSqlType(property.PropertyType)}";
+                    }
                     primaryKey = $"PRIMARY KEY ([{property.Name}])";
                 }
+
                 else
                 {
                     columnDefinition = $"[{property.Name}] {GetSqlType(property.PropertyType)}";
@@ -96,6 +107,7 @@ namespace CustomEFCore.Providers
                 }
             }
         }
+
         public List<string> GetExistingTables()
         {
             var tables = new List<string>();
@@ -149,8 +161,9 @@ namespace CustomEFCore.Providers
 
         private string GetTableNameFromContext<T>() where T : class,new()
         {
-            var dbContextType = typeof(AppDbContext);
+            var dbContextType = typeof(ApplicationDbContext);
             var property = dbContextType.GetProperties()
+
                 .FirstOrDefault(p => p.PropertyType == typeof(DbSet<T>));
 
             return property?.Name ?? typeof(T).Name;
@@ -294,17 +307,40 @@ namespace CustomEFCore.Providers
 
         private string GetForeignKeyTable(PropertyInfo property)
         {
-            if (property.Name.EndsWith("Id") && property.Name != "Id")
+            var foreignKeyAttr = property.GetCustomAttribute<FKAttribute>();
+            if (foreignKeyAttr != null)
             {
-                return property.Name.Replace("Id", "");
+                return foreignKeyAttr.ReferencedTable;
             }
 
-            var foreignKeyAttr = property.GetCustomAttribute<ForeignKeyAttribute>();
-            return foreignKeyAttr?.Name;
+            if (property.Name.EndsWith("Id") && !property.Name.Equals("Id", StringComparison.OrdinalIgnoreCase))
+            {
+                var entityName = property.Name.Substring(0, property.Name.Length - 2);
+
+                var relatedEntityType = Type.GetType(entityName) ?? AppDomain.CurrentDomain.GetAssemblies()
+                    .SelectMany(a => a.GetTypes())
+                    .FirstOrDefault(t => t.Name.Equals(entityName, StringComparison.OrdinalIgnoreCase));
+
+                if (relatedEntityType != null)
+                {
+                    return GetTableNameFromContext(relatedEntityType) ?? entityName;
+                }
+            }
+
+            return null;
         }
 
-        
-        public void UpdateTableSchema(Type entityType,string tableName)
+        private string GetTableNameFromContext(Type entityType)
+        {
+            var dbContextType = typeof(ApplicationDbContext);
+            var property = dbContextType.GetProperties()
+                .FirstOrDefault(p => p.PropertyType.IsGenericType &&
+                                     p.PropertyType.GetGenericTypeDefinition() == typeof(DbSet<>) &&
+                                     p.PropertyType.GetGenericArguments()[0] == entityType);
+
+            return property?.Name ?? entityType.Name;
+        }
+        public void UpdateTableSchema(Type entityType, string tableName)
         {
             var existingColumns = GetTableSchema(tableName);
 
@@ -328,8 +364,8 @@ namespace CustomEFCore.Providers
                     if (!existingColumnType.Equals(modelColumnType, StringComparison.OrdinalIgnoreCase))
                     {
                         var alterColumnQuery = $@"
-                                                  ALTER TABLE [{tableName}] 
-                                                  ALTER COLUMN [{columnName}] {modelColumnType}";
+                                  ALTER TABLE [{tableName}] 
+                                  ALTER COLUMN [{columnName}] {modelColumnType}";
 
                         ExecuteNonQuery(alterColumnQuery);
                         Console.WriteLine($"Updated column '{columnName}' in table '{tableName}'.");
@@ -339,12 +375,34 @@ namespace CustomEFCore.Providers
                 {
                     var modelColumnType = GetCompleteSqlType(property.PropertyType, property.GetCustomAttributes(typeof(RequiredAttribute), true).Any());
 
-                    var addColumnQuery = $@"
-                                            ALTER TABLE [{tableName}] 
-                                            ADD [{columnName}] {modelColumnType}";
+                    if (IsForeignKey(property))
+                    {
+                        var foreignKeyTable = GetForeignKeyTable(property);
+                        if (!string.IsNullOrEmpty(foreignKeyTable))
+                        {
+                            var addForeignKeyColumnQuery = $@"
+                        ALTER TABLE [{tableName}] 
+                        ADD [{columnName}] {modelColumnType},
+                        CONSTRAINT FK_{tableName}_{columnName} FOREIGN KEY ([{columnName}]) 
+                        REFERENCES [{foreignKeyTable}]([Id])";
 
-                    ExecuteNonQuery(addColumnQuery);
-                    Console.WriteLine($"Added column '{columnName}' to table '{tableName}'.");
+                            ExecuteNonQuery(addForeignKeyColumnQuery);
+                            Console.WriteLine($"Added column '{columnName}' with foreign key to '{foreignKeyTable}.Id' in table '{tableName}'.");
+                        }
+                        else
+                        {
+                            Console.WriteLine($"Warning: Could not resolve the foreign key table for property '{property.Name}'.");
+                        }
+                    }
+                    else
+                    {
+                        var addColumnQuery = $@"
+                            ALTER TABLE [{tableName}] 
+                            ADD [{columnName}] {modelColumnType}";
+
+                        ExecuteNonQuery(addColumnQuery);
+                        Console.WriteLine($"Added column '{columnName}' to table '{tableName}'.");
+                    }
                 }
             }
 
@@ -352,9 +410,20 @@ namespace CustomEFCore.Providers
             {
                 if (!modelColumns.ContainsKey(existingColumn) && !existingColumn.Equals("Id", StringComparison.OrdinalIgnoreCase))
                 {
+                    var foreignKeyConstraintName = GetForeignKeyConstraintName(tableName, existingColumn);
+                    if (!string.IsNullOrEmpty(foreignKeyConstraintName))
+                    {
+                        var dropConstraintQuery = $@"
+                                ALTER TABLE [{tableName}] 
+                                DROP CONSTRAINT [{foreignKeyConstraintName}]";
+
+                        ExecuteNonQuery(dropConstraintQuery);
+                        Console.WriteLine($"Dropped foreign key constraint '{foreignKeyConstraintName}' on column '{existingColumn}'.");
+                    }
+
                     var dropColumnQuery = $@"
-                                            ALTER TABLE [{tableName}] 
-                                            DROP COLUMN [{existingColumn}]";
+                            ALTER TABLE [{tableName}] 
+                            DROP COLUMN [{existingColumn}]";
 
                     ExecuteNonQuery(dropColumnQuery);
                     Console.WriteLine($"Dropped column '{existingColumn}' from table '{tableName}'.");
@@ -362,6 +431,22 @@ namespace CustomEFCore.Providers
             }
         }
 
+
+        private string GetForeignKeyConstraintName(string tableName, string columnName)
+        {
+            var query = $@"
+                    SELECT CONSTRAINT_NAME 
+                    FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE 
+                    WHERE TABLE_NAME = '{tableName}' 
+                      AND COLUMN_NAME = '{columnName}'";
+
+            using (var connection = new SqlConnection(_connectionString))
+            using (var command = new SqlCommand(query, connection))
+            {
+                connection.Open();
+                return command.ExecuteScalar() as string;
+            }
+        }
 
         private Dictionary<string, string> GetTableSchema(string tableName)
         {

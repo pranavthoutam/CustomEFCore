@@ -2,11 +2,13 @@
 
 namespace CustomEFCore.Core.DbContext
 {
-    public class AppDbContext : CustomDbContext
+    public class ApplicationDbContext : CustomDbContext
     {
-        public AppDbContext(string connectionString) : base(connectionString) { }
+        public ApplicationDbContext(string connectionString) : base(connectionString) { }
         public DbSet<Product> Products { get; set; }
         public DbSet<Address> Address { get; set; }
         public DbSet<Person> Persons { get; set; }
+        
+        public DbSet<Order> Orders { get; set; }
     }
 }

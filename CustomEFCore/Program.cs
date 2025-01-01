@@ -5,9 +5,9 @@ class Program
 {
     static void Main(string[] args)
     {
-        var connectionString = "Server=192.168.0.30;Database=EMP276;User Id=User5;Password=CDev005#8;Trusted_Connection=False;TrustServerCertificate=True;";
-
-        using (var context = new AppDbContext(connectionString))
+        //var connectionString = "Server=192.168.0.30;Database=EMP276;User Id=User5;Password=CDev005#8;Trusted_Connection=False;TrustServerCertificate=True;";
+        var connectionString = "Server=LAPTOP-B464VUCR;Database=HealthConnect;Integrated Security=SSPI;TrustServerCertificate=True;";
+        using (var context = new ApplicationDbContext(connectionString))
         {
             //context.Products.Add(new Product { Id = 3, Price = 999.99m });
             //context.Address.Add(new Address { Id = 1, Street = "123 Main St" });
@@ -17,7 +17,8 @@ class Program
             //Address address = context.Addresses.ToList().FirstOrDefault(a=>a.Id == 1);
             //context.Addresses.Remove(address);
 
-            context.Persons.Update(new Person { Id = 1,Name="Pranav" });
+            //context.Persons.Update(new Person { Id = 1,Name="Pranav" });
+            context.Orders.Add(new Order { Name = "Pranav" });
             context.SaveChanges();
         }
 
