@@ -8,7 +8,6 @@ namespace CustomEFCore.Core.DbContext
         public DbSet<Product> Products { get; set; }
         public DbSet<Address> Address { get; set; }
         public DbSet<Person> Persons { get; set; }
-        
         public DbSet<Order> Orders { get; set; }
     }
 }

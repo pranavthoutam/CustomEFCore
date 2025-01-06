@@ -17,6 +17,8 @@ namespace CustomEFCore.Core.DbContext
             _existingTables = new HashSet<string>(_provider.GetExistingTables(), StringComparer.OrdinalIgnoreCase);
 
             InitializeDbSets();
+
+            DeleteUnmentionedTables();
         }
 
         private void InitializeDbSets()
@@ -35,8 +37,8 @@ namespace CustomEFCore.Core.DbContext
                 var dbSetInstance = Activator.CreateInstance(typeof(DbSet<>).MakeGenericType(entityType), _provider);
                 property.SetValue(this, dbSetInstance);
             }
-        }
 
+        }
         private void EnsureTableCreated(Type entityType, string tableName)
         {
             if (!_existingTables.Contains(tableName))
@@ -51,7 +53,49 @@ namespace CustomEFCore.Core.DbContext
                 _provider.UpdateTableSchema(entityType, tableName);
             }
         }
+        private void DeleteUnmentionedTables()
+        {
+            var modelNames = GetModelNames().Select(name => name.ToLowerInvariant().TrimEnd('s')).ToList();
+            var dbSetNames = GetDbSetNames().Select(name => name.ToLowerInvariant().TrimEnd('s')).ToList();
+            var dbTables = _existingTables.Select(name => name.ToLowerInvariant().TrimEnd('s')).ToList();
 
+            var tablesToDelete = dbTables
+                .Where(table => modelNames.Contains(table.ToLowerInvariant().TrimEnd('s')) &&
+                                !dbSetNames.Contains(table.ToLowerInvariant().TrimEnd('s')))
+                .ToList();
+
+            foreach (var table in tablesToDelete)
+            {
+                Console.WriteLine($"Deleting unmentioned table: {table}");
+                _provider.DeleteTable(table);
+            }
+
+            if (tablesToDelete.Any())
+            {
+                Console.WriteLine($"Deleted tables: {string.Join(", ", tablesToDelete)}");
+            }
+            else
+            {
+                Console.WriteLine("No unmentioned tables to delete.");
+            }
+        }
+        private List<string> GetDbSetNames()
+        {
+            return GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                            .Where(p => p.PropertyType.IsGenericType &&
+                                        p.PropertyType.GetGenericTypeDefinition() == typeof(DbSet<>))
+                            .Select(p => p.Name)
+                            .ToList();
+        }
+
+        private List<string> GetModelNames()
+        {
+            var modelsNamespace = "CustomEFCore.Models";
+            return Assembly.GetExecutingAssembly().GetTypes()
+                           .Where(t => t.Namespace == modelsNamespace && t.IsClass)
+                           .Select(t => t.Name)
+                           .ToList();
+        }
         public void SaveChanges()
         {
             Console.WriteLine("Changes saved.");

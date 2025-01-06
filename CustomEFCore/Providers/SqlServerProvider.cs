@@ -3,7 +3,6 @@ using System.Reflection;
 using System.ComponentModel.DataAnnotations;
 using CustomEFCore.Attributes;
 using CustomEFCore.Core.DbContext;
-
 namespace CustomEFCore.Providers
 {
     public class SqlServerProvider
@@ -107,7 +106,21 @@ namespace CustomEFCore.Providers
                 }
             }
         }
+        public void DeleteTable(string tableName)
+        {
+            var query = $"DROP TABLE IF EXISTS [{tableName}]";
 
+            using (var connection = new SqlConnection(_connectionString))
+            {
+                connection.Open();
+                using (var command = new SqlCommand(query, connection))
+                {
+                    command.ExecuteNonQuery();
+                }
+            }
+
+            Console.WriteLine($"Table '{tableName}' deleted.");
+        }
         public List<string> GetExistingTables()
         {
             var tables = new List<string>();
@@ -130,8 +143,7 @@ namespace CustomEFCore.Providers
 
             return tables;
         }
-
-        public void InsertEntity<T>(T entity) where T : class,new()
+        public void InsertEntity<T>(T entity) where T : class, new()
         {
             var tableName = GetTableNameFromContext<T>();
 
@@ -139,15 +151,30 @@ namespace CustomEFCore.Providers
                 throw new InvalidOperationException($"Unable to resolve table name for entity type {typeof(T).Name}.");
 
             var properties = typeof(T).GetProperties();
-            var columns = string.Join(", ", properties.Select(p => $"[{p.Name}]"));
-            var values = string.Join(", ", properties.Select(p => $"@{p.Name}"));
+            var primaryKey = properties.FirstOrDefault(p => p.Name.Equals("Id", StringComparison.OrdinalIgnoreCase));
+
+            bool excludePrimaryKey = primaryKey != null &&
+                                     (primaryKey.PropertyType == typeof(int) ||
+                                      primaryKey.PropertyType == typeof(long) ||
+                                      primaryKey.PropertyType == typeof(short) ||
+                                      primaryKey.PropertyType == typeof(byte));
+
+            var filteredProperties = excludePrimaryKey
+                ? properties.Where(p => !p.Name.Equals(primaryKey.Name, StringComparison.OrdinalIgnoreCase)).ToList()
+                : properties.ToList();
+
+            if (!filteredProperties.Any())
+                throw new InvalidOperationException($"No properties available to insert for entity type {typeof(T).Name}.");
+
+            var columns = string.Join(", ", filteredProperties.Select(p => $"[{p.Name}]"));
+            var values = string.Join(", ", filteredProperties.Select(p => $"@{p.Name}"));
 
             var insertQuery = $@"INSERT INTO [{tableName}] ({columns}) VALUES ({values});";
 
             using (var connection = new SqlConnection(_connectionString))
             using (var command = new SqlCommand(insertQuery, connection))
             {
-                foreach (var property in properties)
+                foreach (var property in filteredProperties)
                 {
                     command.Parameters.AddWithValue($"@{property.Name}", property.GetValue(entity) ?? DBNull.Value);
                 }
@@ -157,19 +184,16 @@ namespace CustomEFCore.Providers
                 Console.WriteLine($"Entity inserted into table '{tableName}'.");
             }
         }
-
-
-        private string GetTableNameFromContext<T>() where T : class,new()
+        private string GetTableNameFromContext<T>() where T : class, new()
         {
             var dbContextType = typeof(ApplicationDbContext);
             var property = dbContextType.GetProperties()
-
-                .FirstOrDefault(p => p.PropertyType == typeof(DbSet<T>));
+                .FirstOrDefault(p => p.PropertyType.IsGenericType &&
+                                     p.PropertyType.GetGenericTypeDefinition() == typeof(DbSet<>) &&
+                                     p.PropertyType.GetGenericArguments()[0] == typeof(T));
 
             return property?.Name ?? typeof(T).Name;
         }
-
-
         public void DeleteEntity<T>(T entity) where T:class ,new()
         {
             var tableName = GetTableNameFromContext<T>();
@@ -184,23 +208,30 @@ namespace CustomEFCore.Providers
 
         public void UpdateEntity<T>(T entity) where T : class, new()
         {
-            var tableName = GetTableNameFromContext<T>() ;
+            var tableName = GetTableNameFromContext<T>();
             var properties = typeof(T).GetProperties();
 
-            // Assume the primary key is a property named "Id"
-            var primaryKey = properties.FirstOrDefault(p => p.Name.Equals("Id", StringComparison.OrdinalIgnoreCase));
+            var primaryKey = properties.FirstOrDefault(p =>
+                Attribute.IsDefined(p, typeof(PrimaryKeyAttribute))||
+                p.Name.Equals("Id", StringComparison.OrdinalIgnoreCase));
+
             if (primaryKey == null)
             {
-                throw new InvalidOperationException($"Entity {typeof(T).Name} must have a primary key named 'Id'.");
+                throw new InvalidOperationException($"Entity {typeof(T).Name} must have a primary key.");
             }
 
-            // Collect properties that have been explicitly set (non-default values)
+            var primaryKeyValue = primaryKey.GetValue(entity);
+            if (primaryKeyValue == null)
+            {
+                throw new InvalidOperationException($"Primary key '{primaryKey.Name}' value cannot be null.");
+            }
+
             var nonDefaultProperties = properties
                 .Where(p =>
                 {
                     var value = p.GetValue(entity);
                     if (p.Name.Equals(primaryKey.Name, StringComparison.OrdinalIgnoreCase))
-                        return false; // Exclude primary key from updates
+                        return false;
                     return value != null && !Equals(value, GetDefaultValue(p.PropertyType));
                 })
                 .ToList();
@@ -210,34 +241,28 @@ namespace CustomEFCore.Providers
                 throw new InvalidOperationException("No properties to update. Provide at least one property with a non-default value.");
             }
 
-            // Build the SET clause for the UPDATE query
             var setClause = string.Join(", ", nonDefaultProperties.Select(p => $"[{p.Name}] = @{p.Name}"));
             var updateQuery = $@"UPDATE [{tableName}] SET {setClause} WHERE [{primaryKey.Name}] = @{primaryKey.Name};";
 
             using (var connection = new SqlConnection(_connectionString))
             using (var command = new SqlCommand(updateQuery, connection))
             {
-                // Add parameters for the non-default properties
                 foreach (var property in nonDefaultProperties)
                 {
                     command.Parameters.AddWithValue($"@{property.Name}", property.GetValue(entity) ?? DBNull.Value);
                 }
 
-                // Add the primary key as a parameter
-                command.Parameters.AddWithValue($"@{primaryKey.Name}", primaryKey.GetValue(entity));
+                command.Parameters.AddWithValue($"@{primaryKey.Name}", primaryKeyValue);
 
                 connection.Open();
                 command.ExecuteNonQuery();
                 Console.WriteLine($"Entity updated in table '{tableName}'.");
             }
         }
-
         private object GetDefaultValue(Type type)
         {
             return type.IsValueType ? Activator.CreateInstance(type) : null;
         }
-
-
         public List<T> GetEntities<T>() where T : class, new()
         {
             var entities = new List<T>();
@@ -266,7 +291,6 @@ namespace CustomEFCore.Providers
 
             return entities;
         }
-
         private void ExecuteNonQuery(string query, params (string ParameterName, object Value)[] parameters)
         {
             using (var connection = new SqlConnection(_connectionString))
@@ -279,12 +303,10 @@ namespace CustomEFCore.Providers
                         command.Parameters.AddWithValue(param.ParameterName, param.Value ?? DBNull.Value);
                     }
                 }
-
                 connection.Open();
                 command.ExecuteNonQuery();
             }
         }
-
         private string GetSqlType(Type type)
         {
             return type switch
@@ -295,16 +317,15 @@ namespace CustomEFCore.Providers
                 { } t when t == typeof(decimal) => "DECIMAL",
                 { } t when t == typeof(bool) => "BIT",
                 { } t when t == typeof(Guid) => "UNIQUEIDENTIFIER",
+                { } t when t == typeof(float) => "FLOAT",
                 _ => throw new NotSupportedException($"Unsupported type: {type.Name}")
             };
         }
-
         private bool IsForeignKey(PropertyInfo property)
         {
             return property.Name.EndsWith("Id", StringComparison.OrdinalIgnoreCase) ||
                    property.GetCustomAttribute<FKAttribute>() != null;
         }
-
         private string GetForeignKeyTable(PropertyInfo property)
         {
             var foreignKeyAttr = property.GetCustomAttribute<FKAttribute>();
@@ -312,33 +333,19 @@ namespace CustomEFCore.Providers
             {
                 return foreignKeyAttr.ReferencedTable;
             }
-
             if (property.Name.EndsWith("Id") && !property.Name.Equals("Id", StringComparison.OrdinalIgnoreCase))
             {
                 var entityName = property.Name.Substring(0, property.Name.Length - 2);
-
                 var relatedEntityType = Type.GetType(entityName) ?? AppDomain.CurrentDomain.GetAssemblies()
                     .SelectMany(a => a.GetTypes())
                     .FirstOrDefault(t => t.Name.Equals(entityName, StringComparison.OrdinalIgnoreCase));
-
                 if (relatedEntityType != null)
                 {
-                    return GetTableNameFromContext(relatedEntityType) ?? entityName;
+                    var getTableNameMethod = GetType().GetMethod(nameof(GetTableNameFromContext))?.MakeGenericMethod(relatedEntityType);
+                    return getTableNameMethod?.Invoke(this, null)?.ToString() ?? entityName;
                 }
             }
-
             return null;
-        }
-
-        private string GetTableNameFromContext(Type entityType)
-        {
-            var dbContextType = typeof(ApplicationDbContext);
-            var property = dbContextType.GetProperties()
-                .FirstOrDefault(p => p.PropertyType.IsGenericType &&
-                                     p.PropertyType.GetGenericTypeDefinition() == typeof(DbSet<>) &&
-                                     p.PropertyType.GetGenericArguments()[0] == entityType);
-
-            return property?.Name ?? entityType.Name;
         }
         public void UpdateTableSchema(Type entityType, string tableName)
         {
@@ -430,8 +437,6 @@ namespace CustomEFCore.Providers
                 }
             }
         }
-
-
         private string GetForeignKeyConstraintName(string tableName, string columnName)
         {
             var query = $@"
@@ -447,7 +452,6 @@ namespace CustomEFCore.Providers
                 return command.ExecuteScalar() as string;
             }
         }
-
         private Dictionary<string, string> GetTableSchema(string tableName)
         {
             var schema = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -486,9 +490,6 @@ namespace CustomEFCore.Providers
 
             return schema;
         }
-
-
-
         private string GetCompleteSqlType(Type propertyType, bool isRequired)
         {
             if (Nullable.GetUnderlyingType(propertyType) != null)
@@ -496,7 +497,6 @@ namespace CustomEFCore.Providers
                 propertyType = Nullable.GetUnderlyingType(propertyType)!;
                 isRequired = false;
             }
-
             var sqlType = propertyType switch
             {
                 Type t when t == typeof(string) => "nvarchar(max)",
@@ -518,9 +518,6 @@ namespace CustomEFCore.Providers
 
             return $"{sqlType} {(isRequired ? "NOT NULL" : "NULL")}";
         }
-
-
-
         private string GetCompleteSqlType(string dataType, int? charMaxLength, byte? precision, int? scale, string isNullable)
         {
             if (dataType.Equals("nvarchar", StringComparison.OrdinalIgnoreCase) ||

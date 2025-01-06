@@ -5,8 +5,8 @@ class Program
 {
     static void Main(string[] args)
     {
-        //var connectionString = "Server=192.168.0.30;Database=EMP276;User Id=User5;Password=CDev005#8;Trusted_Connection=False;TrustServerCertificate=True;";
-        var connectionString = "Server=LAPTOP-B464VUCR;Database=HealthConnect;Integrated Security=SSPI;TrustServerCertificate=True;";
+        var connectionString = "Server=192.168.0.30;Database=EMP276;User Id=User5;Password=CDev005#8;Trusted_Connection=False;TrustServerCertificate=True;";
+        //var connectionString = "Server=LAPTOP-B464VUCR;Database=HealthConnect;Integrated Security=SSPI;TrustServerCertificate=True;";
         using (var context = new ApplicationDbContext(connectionString))
         {
             //context.Products.Add(new Product { Id = 3, Price = 999.99m });
@@ -18,23 +18,10 @@ class Program
             //context.Addresses.Remove(address);
 
             //context.Persons.Update(new Person { Id = 1,Name="Pranav" });
-            context.Orders.Add(new Order { Name = "Pranav" });
+            context.Orders.Remove(new Order { Name = "PranavPrince" });
+            //context.Orders.Update(new Order { Name = "Pranav Prince", Price = 150 });
             context.SaveChanges();
         }
-
-
-
-        //var schemaInfoProvider = new SchemaInfoProvider(connectionString);
-        //var scriptGenerator = new ScriptGenerator();
-        //var migrationManager = new MigrationManager(schemaInfoProvider, scriptGenerator);
-        //var schemaUpdater = new SchemaUpdater(migrationManager);
-
-        //schemaUpdater.UpdateSchema();
-
-
-
-
         Console.WriteLine("Operations completed.");
     }
-    
 }

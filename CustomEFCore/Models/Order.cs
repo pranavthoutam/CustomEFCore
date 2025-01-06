@@ -1,10 +1,13 @@
 ﻿
+using CustomEFCore.Attributes;
+
 namespace CustomEFCore.Models
 {
     public class Order
     {
-        public int Id { get; set; }
-
+        [PrimaryKey]
         public string Name { get; set; }
+
+        public float Price { get; set; }
     }
 }
